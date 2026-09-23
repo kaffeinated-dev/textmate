@@ -1,13 +1,25 @@
 name: CI
 
-on: [push]
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
-    runs-on: macOS-latest
+    runs-on: macos-latest
+
+    env:
+      # bin/gen_html (Ruby) cannot read the UTF-8 release notes without a UTF-8 locale
+      LANG: en_US.UTF-8
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v7
       with:
         submodules: recursive
     - name: Setup
@@ -16,3 +28,12 @@ jobs:
       run: ./configure
     - name: Build
       run: ninja TextMate
+    - name: Check linked libraries
+      run: |
+        # Helper tools use the hardened runtime and are not allowed to load Homebrew’s dylibs
+        linked=$(find ~/build -type f -perm +111 -exec otool -L {} + | awk -v prefix="$(brew --prefix)/" '/:$/ { binary = $0 } index($1, prefix) == 1 { print binary, $1 }')
+        if [[ -n "$linked" ]]; then
+          echo "::error::Binaries must not link against Homebrew dylibs:"
+          echo "$linked"
+          exit 1
+        fi
