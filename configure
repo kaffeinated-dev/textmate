@@ -13,16 +13,24 @@ done
 if [[ -e local.rave ]]; then
 	echo >&2 "Skipping writing ‘local.rave’: File already exists"
 else
-	echo >> local.rave 'add FLAGS    "-I/usr/local/include"'
-	echo >> local.rave 'add LN_FLAGS "-L/usr/local/lib"'
+	# Homebrew installs to /opt/homebrew on Apple Silicon and /usr/local on Intel
+	prefix="/usr/local"
+	which -s brew && prefix="$(brew --prefix)"
 
 	for hdr in boost/{crc,variant}.hpp capnp/{message,serialize-packed}.h sparsehash/dense_hash_map; do
-		test -f "/usr/local/include/${hdr}" || error "*** dependency missing: ‘/usr/local/include/${hdr}’. Install dependency and/or update ‘local.rave’ with correct path."
+		test -f "${prefix}/include/${hdr}" || error "*** dependency missing: ‘${prefix}/include/${hdr}’. Install dependency and/or update ‘local.rave’ with correct path."
 	done
 
+	# Link capnp and kj statically: Helper tools like ‘mate’ use the hardened
+	# runtime and are not allowed to load dylibs signed by another team
+	mkdir -p local/lib
 	for lib in capnp kj; do
-		test -f "/usr/local/lib/lib${lib}."* || error "*** dependency missing: ‘/usr/local/lib/lib${lib}.*’. Install dependency and/or update ‘local.rave’ with correct path."
+		test -f "${prefix}/lib/lib${lib}.a" || error "*** dependency missing: ‘${prefix}/lib/lib${lib}.a’. Install dependency and/or update ‘local.rave’ with correct path."
+		ln -sf "${prefix}/lib/lib${lib}.a" "local/lib/lib${lib}.a"
 	done
+
+	echo >> local.rave "add FLAGS    \"-I${prefix}/include\""
+	echo >> local.rave "add LN_FLAGS \"-Llocal/lib\""
 fi
 
 # ========================
