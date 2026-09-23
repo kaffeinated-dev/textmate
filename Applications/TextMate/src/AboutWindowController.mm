@@ -33,7 +33,7 @@ static NSData* Digest (NSString* someString)
 
 + (void)showChangesIfUpdated
 {
-	NSURL* url = [[NSBundle mainBundle] URLForResource:@"Changes" withExtension:@"html"];
+	NSURL* url = [[NSBundle mainBundle] URLForResource:@"About/Changes" withExtension:@"html"];
 	dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
 		if(NSString* releaseNotes = [NSString stringWithContentsOfURL:url encoding:NSUTF8StringEncoding error:NULL])
 		{
@@ -137,7 +137,7 @@ static NSData* Digest (NSString* someString)
 	self.selectedPage = @"Changes";
 	[self showWindow:self];
 
-	NSURL* url = [[NSBundle mainBundle] URLForResource:@"Changes" withExtension:@"html"];
+	NSURL* url = [[NSBundle mainBundle] URLForResource:@"About/Changes" withExtension:@"html"];
 	if(NSString* releaseNotes = [NSString stringWithContentsOfURL:url encoding:NSUTF8StringEncoding error:NULL])
 		[NSUserDefaults.standardUserDefaults setObject:Digest(releaseNotes) forKey:kUserDefaultsReleaseNotesDigestKey];
 }
