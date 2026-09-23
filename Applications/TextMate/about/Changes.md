@@ -2,6 +2,12 @@ Title: Release Notes
 
 # Changes
 
+## 2026-09-23 (v2.0.23+kaffeinated.1)
+
+* First build of the [kaffeinated-dev fork](https://github.com/kaffeinated-dev/textmate), based on TextMate 2.0.23.
+* TextMate no longer checks api.textmate.org for software updates or submits crash reports to MacroMates, and the _Software Update_ pane has been removed from Preferences.
+* `./configure` now finds dependencies installed with Homebrew on Apple Silicon.
+
 ## 2021-10-12 (v2.0.23)
 
 * Miscellaneous improvements, [see changes since v2.0.22 on GitHub](https://github.com/textmate/textmate/compare/v2.0.22...v2.0.23)
