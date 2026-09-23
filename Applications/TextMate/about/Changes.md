@@ -2,6 +2,16 @@ Title: Release Notes
 
 # Changes
 
+## 2026-09-23 (v2.0.23+kaffeinated.1)
+
+* First build of the [kaffeinated-dev fork](https://github.com/kaffeinated-dev/textmate), based on TextMate 2.0.23.
+* TextMate no longer checks api.textmate.org for software updates or submits crash reports to MacroMates, and the _Software Update_ pane has been removed from Preferences.
+* `./configure` now finds dependencies installed with Homebrew on Apple Silicon.
+
+## 2021-10-12 (v2.0.23)
+
+* Miscellaneous improvements, [see changes since v2.0.22 on GitHub](https://github.com/textmate/textmate/compare/v2.0.22...v2.0.23)
+
 ## 2021-04-16 (v2.0.22)
 
 * A few more tweaks to improve things on macOS 11 including dropping use of floating header rows in file browser (SCM Status) and search results, as these appear to cause problems on Big Sur.
