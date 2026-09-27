@@ -2,6 +2,10 @@ Title: Release Notes
 
 # Changes
 
+## 2026-09-28 (v2.0.23+kaffeinated.2)
+
+* Bundles can now start a [language server](https://microsoft.github.io/language-server-protocol/) for documents with a `languageServer` setting (in a preference for their scope). The server gets the documents open in its project as they are edited, and its diagnostics are shown as marks in the gutter: click a mark to read it, or press F3 to go to the next one. Set `TM_DISABLE_LANGUAGE_SERVER` in _Preferences → Variables_ or a `.tm_properties` file to turn this off.
+
 ## 2026-09-23 (v2.0.23+kaffeinated.1)
 
 * First build of the [kaffeinated-dev fork](https://github.com/kaffeinated-dev/textmate), based on TextMate 2.0.23.

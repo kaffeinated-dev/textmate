@@ -5,6 +5,7 @@
 #import <regexp/find.h> // find::options_t
 #import <scm/scm.h>
 
+extern NSNotificationName const OakDocumentDidLoadNotification;
 extern NSNotificationName const OakDocumentContentDidChangeNotification;
 extern NSNotificationName const OakDocumentMarksDidChangeNotification;
 extern NSNotificationName const OakDocumentWillReloadNotification;
