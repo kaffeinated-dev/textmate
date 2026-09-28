@@ -364,7 +364,8 @@ NSString* LSPURIForPath (NSString* path)
 	}
 }
 
-// Requests from the server, answered as a client without these features does.
+// Requests from the server, answered as a client without these features does,
+// unless the request handler answers them.
 - (void)handleRequest:(NSString*)method params:(id)params identifier:(id)identifier
 {
 	id result = NSNull.null;
@@ -381,13 +382,10 @@ NSString* LSPURIForPath (NSString* path)
 	{
 		result = @[ @{ @"uri": LSPURIForPath(_rootURL.path), @"name": _rootURL.lastPathComponent } ];
 	}
-	else if([method isEqualToString:@"workspace/applyEdit"])
-	{
-		result = @{ @"applied": @NO };
-	}
 	else if(![@[ @"client/registerCapability", @"client/unregisterCapability", @"window/workDoneProgress/create", @"window/showMessageRequest" ] containsObject:method])
 	{
-		error = @{ @"code": @(-32601), @"message": [NSString stringWithFormat:@"TextMate does not support %@", method] };
+		if(!(result = _requestHandler ? _requestHandler(method, params) : nil))
+			error = @{ @"code": @(-32601), @"message": [NSString stringWithFormat:@"TextMate does not support %@", method] };
 	}
 
 	[self writeMessage:error ? @{ @"id": identifier, @"error": error } : @{ @"id": identifier, @"result": result }];

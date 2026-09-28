@@ -20,6 +20,11 @@ NSString* LSPURIForPath (NSString* path);
 @property (nonatomic, copy) void(^notificationHandler)(NSString* method, id params);
 @property (nonatomic, copy) void(^terminationHandler)(int status);
 
+// Called on the main thread with requests from the server that it doesn’t
+// answer itself (such as workspace/applyEdit). Returns the result, or nil for
+// an error.
+@property (nonatomic, copy) id(^requestHandler)(NSString* method, id params);
+
 // Starts the process, run by /bin/sh in the root folder, and initializes the
 // server. Messages sent before the server is initialized are sent once it is.
 - (BOOL)start;
