@@ -238,7 +238,14 @@ static NSString* const kMarkTypePrefix = @"lsp/";
 	if(state.changeTimer)
 		[self sendChangesForDocument:document];
 
+	// Workspace requests (such as workspace/symbol) go to the document’s server, as they are.
 	NSMutableDictionary* request = [params mutableCopy] ?: [NSMutableDictionary dictionary];
+	if([method hasPrefix:@"workspace/"])
+	{
+		[state.server sendRequest:method params:request handler:handler];
+		return YES;
+	}
+
 	if(!request[@"textDocument"])
 		request[@"textDocument"] = @{ @"uri": state.uri };
 	if([method isEqualToString:@"textDocument/codeAction"])

@@ -26,9 +26,12 @@
 
 // Sends a request about a document to its language server, adding to params
 // the document (as textDocument) and, if given, a position (as TextMate has
-// it: a zero-based line and byte offset) converted for the server. Changes
-// not yet sent to the server are sent first. Returns NO when the document has
-// no language server; otherwise the handler is called on the main thread.
+// it: a zero-based line and byte offset) converted for the server. A code
+// action request gets the line as range, and its diagnostics as context. A
+// workspace request is sent as it is, and workspace/applyEdit is applied by
+// TextMate. Changes not yet sent to the server are sent first. Returns NO
+// when the document has no language server; otherwise the handler is called
+// on the main thread.
 - (BOOL)sendRequest:(NSString*)method params:(NSDictionary*)params document:(OakDocument*)document position:(text::pos_t const&)position handler:(void(^)(id result, NSDictionary* error))handler;
 
 // The words the language server suggests for completing the word at the
