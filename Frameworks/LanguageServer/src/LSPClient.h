@@ -17,6 +17,22 @@
 // Setting TM_DISABLE_LANGUAGE_SERVER (in Preferences → Variables or a
 // .tm_properties file) turns this off. Servers stop when TextMate quits.
 
+#import <text/types.h>
+
+@class OakDocument;
+
 @interface LSPClient : NSObject
 + (instancetype)sharedInstance;
+
+// Sends a request about a document to its language server, adding to params
+// the document (as textDocument) and, if given, a position (as TextMate has
+// it: a zero-based line and byte offset) converted for the server. Changes
+// not yet sent to the server are sent first. Returns NO when the document has
+// no language server; otherwise the handler is called on the main thread.
+- (BOOL)sendRequest:(NSString*)method params:(NSDictionary*)params document:(OakDocument*)document position:(text::pos_t const&)position handler:(void(^)(id result, NSDictionary* error))handler;
+
+// The words the language server suggests for completing the word at the
+// position: the names of its completion items, in the server’s order. Waits
+// at most the timeout for the server, and returns nil without a server.
+- (NSArray<NSString*>*)completionsForDocument:(OakDocument*)document position:(text::pos_t const&)position timeout:(NSTimeInterval)timeout;
 @end

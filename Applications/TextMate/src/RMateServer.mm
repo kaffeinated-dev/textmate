@@ -3,6 +3,7 @@
 #include <text/hexdump.h>
 #include <document/OakDocument.h>
 #include <document/OakDocumentController.h>
+#include <LanguageServer/LSPClient.h>
 #include <oak/debug.h>
 #include <authorization/authorization.h>
 #include <io/io.h>
@@ -399,6 +400,8 @@ struct socket_observer_t
 			{
 				if(records.empty() || records.begin()->command == "open") // we treat no command as ‘open’ to bring our application to front
 					open_documents(socket);
+				else if(records.begin()->command == "lsp")
+					send_language_server_requests(socket);
 				else
 					handle_marks(socket);
 				return false;
@@ -586,6 +589,54 @@ struct socket_observer_t
 		if(documents.count)
 				[OakDocumentController.sharedInstance showDocuments:documents];
 		else	[NSApp activateIgnoringOtherApps:YES];
+	}
+
+	// Requests for the language server of a document (mate --lsp), answered
+	// with the server’s response, as JSON: { "result": … } or { "error": … }.
+	void send_language_server_requests (socket_t const& socket)
+	{
+		for(auto& record : records)
+		{
+			if(record.command != "lsp")
+				continue;
+
+			auto& args = record.arguments;
+
+			OakDocument* doc;
+			if(args.find("uuid") != args.end())
+				doc = [OakDocumentController.sharedInstance findDocumentWithIdentifier:[[NSUUID alloc] initWithUUIDString:to_ns(args["uuid"])]];
+			else if(args.find("path") != args.end())
+				doc = [OakDocumentController.sharedInstance documentWithPath:to_ns(args["path"])];
+
+			id params = @{ };
+			if(args.find("params") != args.end())
+				params = [NSJSONSerialization JSONObjectWithData:[to_ns(args["params"]) dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+
+			// Replies once: with the response, or an error if there is none in time.
+			__block socket_t replySocket = socket;
+			__block BOOL replied = NO;
+			void(^reply)(id, NSDictionary*) = ^(id result, NSDictionary* error){
+				if(replied)
+					return;
+				replied = YES;
+
+				NSData* json = [NSJSONSerialization dataWithJSONObject:(error ? @{ @"error": error } : @{ @"result": result ?: NSNull.null }) options:0 error:nil];
+				std::string const header = text::format("close\r\ndata: %zu\r\n", (size_t)json.length);
+				if(write(replySocket, header.data(), header.size()) != header.size() || write(replySocket, json.bytes, json.length) != json.length || write(replySocket, "\r\n", 2) != 2)
+					os_log_error(OS_LOG_DEFAULT, "rmate: unable to reply to language server request");
+				replySocket = socket_t(); // Closes the connection
+			};
+
+			dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+				reply(nil, @{ @"code": @(-32803), @"message": @"The language server did not respond in time." });
+			});
+
+			text::pos_t const position = args.find("line") != args.end() ? text::pos_t(args["line"]) : text::pos_t::undefined;
+			if(!doc || ![params isKindOfClass:[NSDictionary class]])
+				reply(nil, @{ @"code": @(-32602), @"message": doc ? @"The params are not a JSON object." : @"There is no such document." });
+			else if(![LSPClient.sharedInstance sendRequest:to_ns(args["method"]) params:params document:doc position:position handler:reply])
+				reply(nil, @{ @"code": @(-32601), @"message": @"There is no language server for this document." });
+		}
 	}
 
 	void handle_marks (socket_t const& socket)

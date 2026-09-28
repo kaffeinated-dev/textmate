@@ -5,6 +5,7 @@
 #import "LiveSearchView.h"
 #import "OTVHUD.h"
 #import <OakCommand/OakCommand.h>
+#import <LanguageServer/LSPClient.h>
 #import <OakAppKit/OakAppKit.h>
 #import <OakAppKit/NSAlert Additions.h>
 #import <OakAppKit/NSEvent Additions.h>
@@ -921,6 +922,11 @@ static std::string shell_quote (std::vector<std::string> paths)
 			std::map<std::string, std::string> variables_for_bundle_item (bundles::item_ptr item)
 			{
 				return [_self variablesForBundleItem:item];
+			}
+
+			std::vector<std::string> language_server_completions (size_t index)
+			{
+				return [_self languageServerCompletionsAtIndex:index];
 			}
 
 			OakTextView* _self;
@@ -1891,6 +1897,22 @@ doScroll:
 	viewRect.origin.y = [[NSScreen mainScreen] frame].size.height - (viewRect.origin.y + viewRect.size.height);
 	selectedRect.origin.y = [[NSScreen mainScreen] frame].size.height - (selectedRect.origin.y + selectedRect.size.height);
 	UAZoomChangeFocus(&viewRect, &selectedRect, kUAZoomFocusTypeInsertionPoint);
+}
+
+// ===================
+// = Language Server =
+// ===================
+
+// Suggestions for ⎋ completion (waiting at most a second for the server).
+- (std::vector<std::string>)languageServerCompletionsAtIndex:(size_t)index
+{
+	std::vector<std::string> res;
+	if(documentView)
+	{
+		for(NSString* word in [LSPClient.sharedInstance completionsForDocument:self.document position:documentView->convert(index) timeout:1])
+			res.push_back(to_s(word));
+	}
+	return res;
 }
 
 // ================

@@ -113,6 +113,7 @@ static void usage (FILE* io)
 		"Usage: %1$s [-wl<selection>t<filetype>m<name>rehv] [-u<identifier> | file ...]\n"
 		"       %1$s [-c<mark>] -s<mark>:<value> -l<line> [-u<identifier> | file ...]\n"
 		"       %1$s -c<mark> [-l<line>] [-u<identifier> | file ...]\n"
+		"       %1$s --lsp <method> [--lsp-params <json>] [-l<line>] [-u<identifier> | file]\n"
 		"\n"
 		"Options:\n"
 		" -w, --[no-]wait                 Wait for file to be closed by TextMate.\n"
@@ -125,6 +126,9 @@ static void usage (FILE* io)
 		" -e, --[no-]escapes              Set this to preserve ANSI escapes from stdin.\n"
 		" -s, --set-mark <mark>[:<value>] Set a mark with optional <value> (requires --line).\n"
 		" -c, --clear-mark <mark>         Clear a mark (clears all marks without --line).\n"
+		"     --lsp <method>              Send a request to the language server of the\n"
+		"                                 document (at --line) and print the response.\n"
+		"     --lsp-params <json>         Params for the request (a JSON object).\n"
 		" -h, --help                      Show this information.\n"
 		" -v, --version                   Print version information.\n"
 		"\n"
@@ -270,6 +274,8 @@ int main (int argc, char const* argv[])
 		{ "no-escapes",       no_argument,         0,      'E'   },
 		{ "help",             no_argument,         0,      'h'   },
 		{ "line",             required_argument,   0,      'l'   },
+		{ "lsp",              required_argument,   0,      'L'   },
+		{ "lsp-params",       required_argument,   0,      'P'   },
 		{ "name",             required_argument,   0,      'm'   },
 		{ "project",          required_argument,   0,      'p'   },
 		{ "recent",           no_argument,         0,      'r'   },
@@ -285,6 +291,7 @@ int main (int argc, char const* argv[])
 
 	osx::authorization_t auth;
 	std::vector<std::string> files, lines, types, names, projects, setMarks, clearMarks;
+	std::string lspMethod, lspParams;
 	oak::uuid_t uuid;
 
 	boolean changeDir   = boolean::kDisable;
@@ -323,6 +330,8 @@ int main (int argc, char const* argv[])
 				case 'E': keepEscapes = boolean::kDisable; break;
 				case 'h': usage(stdout);            return EX_OK;
 				case 'l': append(optarg, lines);    break;
+				case 'L': lspMethod = optarg;       break;
+				case 'P': lspParams = optarg;       break;
 				case 'm': append(optarg, names);    break;
 				case 'p': append(optarg, projects); break;
 				case 'r': addToRecent = boolean::kEnable;  break;
@@ -373,10 +382,10 @@ int main (int argc, char const* argv[])
 	std::string defaultProject = projects.empty() ? (getenv("TM_PROJECT_UUID") ?: "") : projects.back();
 
 	bool stdinIsAPipe = isatty(STDIN_FILENO) == 0;
-	if(files.empty() && !uuid && (!setMarks.empty() || (!clearMarks.empty() && !lines.empty())) && getenv("TM_DOCUMENT_UUID"))
+	if(files.empty() && !uuid && (!setMarks.empty() || (!clearMarks.empty() && !lines.empty()) || !lspMethod.empty()) && getenv("TM_DOCUMENT_UUID"))
 		uuid = getenv("TM_DOCUMENT_UUID");
 
-	if(files.empty() && (uuid || (setMarks.empty() && clearMarks.empty())))
+	if(files.empty() && lspMethod.empty() && (uuid || (setMarks.empty() && clearMarks.empty())))
 	{
 		if(uuid)
 			files.push_back(kUUIDPrefix + to_s(uuid));
@@ -411,7 +420,21 @@ int main (int argc, char const* argv[])
 	if(len == -1)
 		exit(EX_IOERR);
 
-	if(!clearMarks.empty())
+	if(!lspMethod.empty())
+	{
+		write(fd, "lsp\r\n", 5);
+		write_key_pair(fd, "method", lspMethod);
+		write_key_pair(fd, "params", lspParams.empty() ? "{}" : lspParams);
+		if(uuid)
+			write_key_pair(fd, "uuid", to_s(uuid));
+		else if(!files.empty())
+			write_key_pair(fd, "path", files.front());
+		if(!lines.empty())
+			write_key_pair(fd, "line", lines.back());
+		write(fd, "\r\n", 2);
+	}
+
+	if(lspMethod.empty() && !clearMarks.empty())
 	{
 		size_t n = setMarks.empty() ? std::max(clearMarks.size(), std::max(files.size(), lines.size())) : clearMarks.size();
 		for(size_t i = 0; i < n; ++i)
@@ -434,7 +457,7 @@ int main (int argc, char const* argv[])
 		}
 	}
 
-	if(!setMarks.empty() && !files.empty() && !lines.empty())
+	if(lspMethod.empty() && !setMarks.empty() && !files.empty() && !lines.empty())
 	{
 		size_t n = std::max(setMarks.size(), std::max(files.size(), lines.size()));
 		for(size_t i = 0; i < n; ++i)
@@ -452,7 +475,7 @@ int main (int argc, char const* argv[])
 		}
 	}
 
-	if(clearMarks.empty() && setMarks.empty())
+	if(lspMethod.empty() && clearMarks.empty() && setMarks.empty())
 	{
 		for(size_t i = 0; i < files.size(); ++i)
 		{

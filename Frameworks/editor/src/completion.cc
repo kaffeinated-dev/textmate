@@ -114,7 +114,15 @@ namespace ng
 			}
 		}
 
-		if(commandResult.empty() && prefix.empty() && suffix.empty())
+		// ===================================
+		// = Ask the Language Server, If Any =
+		// ===================================
+
+		std::vector<std::string> serverResult;
+		if(_delegate)
+			serverResult = _delegate->language_server_completions(bow + prefix.size());
+
+		if(commandResult.empty() && serverResult.empty() && prefix.empty() && suffix.empty())
 			return { };
 
 		for(ssize_t i = 0; i < commandResult.size(); ++i)
@@ -165,6 +173,14 @@ namespace ng
 			if(it != ranked.end())
 					it->second = std::min(rank, it->second);
 			else	ranked.emplace(word, rank);
+		}
+
+		// The language server’s suggestions come first, in its order.
+		for(size_t i = 0; i < serverResult.size(); ++i)
+		{
+			std::string const& word = serverResult[i];
+			if(prefix.size() < word.size() && word.find(prefix) == 0 && word != currentWord)
+				ranked[word.substr(prefix.size())] = std::numeric_limits<ssize_t>::min() + i;
 		}
 
 		std::map<ssize_t, std::string> ordered;
