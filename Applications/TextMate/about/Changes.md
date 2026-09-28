@@ -2,6 +2,11 @@ Title: Release Notes
 
 # Changes
 
+## 2026-09-28 (v2.0.23+kaffeinated.3)
+
+* Completion (⎋) now suggests what the document’s language server does first, and then words of the document as before.
+* `mate --lsp «method»` sends a request to the language server of a document (`--uuid`, by default `TM_DOCUMENT_UUID`) and prints the response as JSON. The document and the position given with `--line` are added to the params (`--lsp-params`), and edits not yet sent to the server are sent first. Bundle commands can use this for completion lists, hover, references, and so on.
+
 ## 2026-09-28 (v2.0.23+kaffeinated.2)
 
 * Bundles can now start a [language server](https://microsoft.github.io/language-server-protocol/) for documents with a `languageServer` setting (in a preference for their scope). The server gets the documents open in its project as they are edited, and its diagnostics are shown as marks in the gutter: click a mark to read it, or press F3 to go to the next one. Set `TM_DISABLE_LANGUAGE_SERVER` in _Preferences → Variables_ or a `.tm_properties` file to turn this off.

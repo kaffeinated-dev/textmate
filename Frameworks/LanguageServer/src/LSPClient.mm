@@ -208,6 +208,95 @@ static NSString* const kMarkTypePrefix = @"lsp/";
 	}
 }
 
+// ============
+// = Requests =
+// ============
+
+- (BOOL)sendRequest:(NSString*)method params:(NSDictionary*)params document:(OakDocument*)document position:(text::pos_t const&)position handler:(void(^)(id result, NSDictionary* error))handler
+{
+	if(!document)
+		return NO;
+
+	LSPDocument* state = _documents[document.identifier];
+	if(!state || !state.server.isRunning)
+	{
+		[self closeDocument:document];
+		[self openDocument:document];
+		if(!(state = _documents[document.identifier]))
+			return NO;
+	}
+
+	if(state.changeTimer)
+		[self sendChangesForDocument:document];
+
+	NSMutableDictionary* request = [params mutableCopy] ?: [NSMutableDictionary dictionary];
+	if(!request[@"textDocument"])
+		request[@"textDocument"] = @{ @"uri": state.uri };
+	if(position != text::pos_t::undefined)
+		request[@"position"] = [self serverPositionForDocument:document position:position];
+
+	[state.server sendRequest:method params:request handler:handler];
+	return YES;
+}
+
+// A position with a byte offset (as TextMate has it) as one with a UTF-16 offset.
+- (NSDictionary*)serverPositionForDocument:(OakDocument*)document position:(text::pos_t const&)position
+{
+	NSUInteger character = 0;
+	NSArray<NSString*>* lines = [document.content componentsSeparatedByString:@"\n"];
+	if(position.line < lines.count)
+	{
+		NSData* line = [lines[position.line] dataUsingEncoding:NSUTF8StringEncoding];
+		character = [[NSString alloc] initWithBytes:line.bytes length:MIN(position.column, line.length) encoding:NSUTF8StringEncoding].length;
+	}
+	return @{ @"line": @(position.line), @"character": @(character) };
+}
+
+- (NSArray<NSString*>*)completionsForDocument:(OakDocument*)document position:(text::pos_t const&)position timeout:(NSTimeInterval)timeout
+{
+	__block id response;
+	__block BOOL done = NO;
+	BOOL sent = [self sendRequest:@"textDocument/completion" params:@{ } document:document position:position handler:^(id result, NSDictionary* error){
+		response = result;
+		done = YES;
+	}];
+	if(!sent)
+		return nil;
+
+	// The server’s messages arrive on the main queue, which the run loop runs.
+	NSDate* limit = [NSDate dateWithTimeIntervalSinceNow:timeout];
+	while(!done && limit.timeIntervalSinceNow > 0)
+		CFRunLoopRunInMode(kCFRunLoopDefaultMode, MIN(limit.timeIntervalSinceNow, 0.05), true);
+
+	NSArray* items = [response isKindOfClass:[NSDictionary class]] ? response[@"items"] : response;
+	if(![items isKindOfClass:[NSArray class]])
+		return nil;
+
+	NSMutableArray* sorted = [NSMutableArray array];
+	for(NSDictionary* item in items)
+	{
+		if([item isKindOfClass:[NSDictionary class]] && [item[@"label"] isKindOfClass:[NSString class]])
+			[sorted addObject:item];
+	}
+	[sorted sortWithOptions:NSSortStable usingComparator:^NSComparisonResult(NSDictionary* lhs, NSDictionary* rhs){
+		NSString* left  = [lhs[@"sortText"] isKindOfClass:[NSString class]] ? lhs[@"sortText"] : lhs[@"label"];
+		NSString* right = [rhs[@"sortText"] isKindOfClass:[NSString class]] ? rhs[@"sortText"] : rhs[@"label"];
+		return [left compare:right];
+	}];
+
+	// The name of an item such as “map(enumerable, fun)”, completed as a word.
+	NSCharacterSet* nameEnd = [NSCharacterSet characterSetWithCharactersInString:@"( "];
+	NSMutableOrderedSet* words = [NSMutableOrderedSet orderedSet];
+	for(NSDictionary* item in sorted)
+	{
+		NSString* name = [item[@"filterText"] isKindOfClass:[NSString class]] ? item[@"filterText"] : item[@"label"];
+		name = [name componentsSeparatedByCharactersInSet:nameEnd].firstObject;
+		if(name.length)
+			[words addObject:name];
+	}
+	return words.array;
+}
+
 // ===========
 // = Servers =
 // ===========
