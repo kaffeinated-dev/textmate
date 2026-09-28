@@ -1,0 +1,6 @@
+target "${dirname}" {
+	require bundles document io ns plist scope settings text
+	headers src/LSPClient.h
+	sources src/*.mm
+	frameworks Cocoa
+}

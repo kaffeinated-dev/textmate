@@ -169,9 +169,12 @@ static NSString* const kFoldingsColumnIdentifier  = @"foldings";
 	{
 		gutterImages = gutterImages ?: [NSMutableDictionary new];
 
-		NSImage* image = [aName hasPrefix:@"/"] ? [[NSImage alloc] initWithContentsOfFile:aName] : [NSImage imageNamed:aName inSameBundleAsClass:[self class]];
-		if(!image && ![aName hasPrefix:@"/"] && ![aName hasSuffix:@" Template"])
-			image = [NSImage imageNamed:[aName stringByAppendingString:@" Template"] inSameBundleAsClass:[self class]];
+		// Marks can have types such as lsp/error, shown with the image for the last part.
+		NSString* imageName = [aName hasPrefix:@"/"] ? aName : aName.lastPathComponent;
+
+		NSImage* image = [aName hasPrefix:@"/"] ? [[NSImage alloc] initWithContentsOfFile:aName] : [NSImage imageNamed:imageName inSameBundleAsClass:[self class]];
+		if(!image && ![aName hasPrefix:@"/"] && ![imageName hasSuffix:@" Template"])
+			image = [NSImage imageNamed:[imageName stringByAppendingString:@" Template"] inSameBundleAsClass:[self class]];
 
 		if([aName hasPrefix:@"/"] && [[aName stringByDeletingPathExtension] hasSuffix:@" Template"])
 			[image setTemplate:YES];

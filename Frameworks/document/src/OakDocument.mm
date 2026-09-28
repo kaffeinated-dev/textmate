@@ -160,6 +160,7 @@ namespace document
 // = OakDocument Implementation =
 // ==============================
 
+NSNotificationName const OakDocumentDidLoadNotification          = @"OakDocumentDidLoadNotification";
 NSNotificationName const OakDocumentContentDidChangeNotification = @"OakDocumentContentDidChangeNotification";
 NSNotificationName const OakDocumentMarksDidChangeNotification   = @"OakDocumentMarksDidChangeNotification";
 NSNotificationName const OakDocumentWillReloadNotification       = @"OakDocumentWillReloadNotification";
@@ -883,6 +884,8 @@ static void* kDocumentEditedObserverContext = &kDocumentEditedObserverContext;
 	[self snapshot];
 	[self updateRecentDocumentMenu];
 	self.observeFileSystem = YES;
+
+	[NSNotificationCenter.defaultCenter postNotificationName:OakDocumentDidLoadNotification object:self];
 }
 
 // =================

@@ -8,6 +8,7 @@
 #import <BundlesManager/BundlesManager.h>
 #import <DocumentWindow/DocumentWindowController.h>
 #import <Find/Find.h>
+#import <LanguageServer/LSPClient.h>
 #import <CommitWindow/CommitWindow.h>
 #import <OakAppKit/NSAlert Additions.h>
 #import <OakAppKit/NSMenuItem Additions.h>
@@ -598,6 +599,7 @@ BOOL HasDocumentWindow (NSArray* windows)
 	[AboutWindowController showChangesIfUpdated];
 
 	[OakCommitWindowServer sharedInstance]; // Setup server
+	[LSPClient sharedInstance]; // Start language servers for open documents
 
 	self.didFinishLaunching = YES;
 }
