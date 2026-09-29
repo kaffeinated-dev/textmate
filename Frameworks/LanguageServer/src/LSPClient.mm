@@ -64,11 +64,59 @@ static NSDictionary* ContentChange (NSString* oldText, NSString* newText)
 	};
 }
 
+// The lines two texts have in common, as pairs of their indices in order,
+// found with Myers’ algorithm: equal(x, y) tells whether line x of the first
+// is line y of the second. After too many changes, none.
+template <typename Equal>
+static std::vector<std::pair<int, int>> CommonLines (int n, int m, Equal const& equal)
+{
+	// For each number of changes d (lines removed or added), how far the paths
+	// with d changes get in the first text along each diagonal k (x - y).
+	int const max = n + m;
+	std::vector<int> v(2 * max + 3, 0);
+	auto V = [&](int k) -> int& { return v[k + max + 1]; };
+	std::vector<std::vector<int>> reached; // reached[d][k + d]
+	int changes = -1;
+	for(int d = 0; d <= max && d <= 1000 && changes == -1; ++d)
+	{
+		for(int k = -d; k <= d; k += 2)
+		{
+			int x = k == -d || (k != d && V(k - 1) < V(k + 1)) ? V(k + 1) : V(k - 1) + 1;
+			for(int y = x - k; x < n && y < m && equal(x, y); ++x, ++y)
+				;
+			V(k) = x;
+			if(x >= n && x - k >= m)
+				changes = d;
+		}
+		reached.emplace_back(v.begin() + max + 1 - d, v.begin() + max + 2 + d);
+	}
+
+	std::vector<std::pair<int, int>> res;
+	if(changes == -1)
+		return res;
+
+	int x = n, y = m;
+	for(int d = changes; d > 0; --d)
+	{
+		int const k = x - y;
+		auto R = [&](int diagonal) { return reached[d - 1][diagonal + d - 1]; };
+		int const previousK = k == -d || (k != d && R(k - 1) < R(k + 1)) ? k + 1 : k - 1;
+		int const previousX = R(previousK), previousY = previousX - previousK;
+		for(; x > previousX && y > previousY; --x, --y)
+			res.emplace_back(x - 1, y - 1);
+		x = previousX, y = previousY;
+	}
+	for(; x > 0 && y > 0; --x, --y)
+		res.emplace_back(x - 1, y - 1);
+	std::reverse(res.begin(), res.end());
+	return res;
+}
+
 // The replacements (byte ranges of one text, and their new text) that turn it
-// into another, line by line: the lines they have in common (found with
-// Myers’ algorithm) stay as they are, as do the start and end of the others,
-// so that the caret and marks on them stay where they are. Servers such as
-// ruby-lsp format a document by replacing all of it.
+// into another, line by line: the lines they have in common stay as they are,
+// as do the start and end of the others, so that the caret and marks on them
+// stay where they are. Servers such as ruby-lsp format a document by
+// replacing all of it.
 static std::vector<std::pair<std::pair<size_t, size_t>, std::string>> LineReplacements (std::string const& from, std::string const& to)
 {
 	auto lines = [](std::string const& str){
@@ -83,46 +131,27 @@ static std::vector<std::pair<std::pair<size_t, size_t>, std::string>> LineReplac
 		return res;
 	};
 
+	auto trimmed = [](std::string_view line){
+		size_t const first = line.find_first_not_of(" \t\r\n");
+		return first == std::string_view::npos ? std::string_view() : line.substr(first, line.find_last_not_of(" \t\r\n") - first + 1);
+	};
+
 	std::vector<std::string_view> const a = lines(from), b = lines(to);
-	int const n = a.size(), m = b.size(), max = n + m;
+	int const n = a.size(), m = b.size();
 
-	// For each number of changes d (lines removed or added), how far the paths
-	// with d changes get in the old lines along each diagonal k (x - y).
-	std::vector<int> v(2 * max + 3, 0);
-	auto V = [&](int k) -> int& { return v[k + max + 1]; };
-	std::vector<std::vector<int>> reached; // reached[d][k + d]
-	int changes = -1;
-	for(int d = 0; d <= max && d <= 1000 && changes == -1; ++d)
+	// The lines in common and, between them, the lines that are the same but
+	// for white space (such as lines indented again, when blank lines were
+	// also removed), followed by the ends of both texts.
+	std::vector<std::pair<int, int>> common = CommonLines(n, m, [&](int x, int y){ return a[x] == b[y]; }), paired;
+	common.emplace_back(n, m);
+	int i = 0, j = 0;
+	for(auto const& [nextI, nextJ] : common)
 	{
-		for(int k = -d; k <= d; k += 2)
-		{
-			int x = k == -d || (k != d && V(k - 1) < V(k + 1)) ? V(k + 1) : V(k - 1) + 1;
-			for(int y = x - k; x < n && y < m && a[x] == b[y]; ++x, ++y)
-				;
-			V(k) = x;
-			if(x >= n && x - k >= m)
-				changes = d;
-		}
-		reached.emplace_back(v.begin() + max + 1 - d, v.begin() + max + 2 + d);
+		for(auto const& [x, y] : CommonLines(nextI - i, nextJ - j, [&](int p, int q){ return trimmed(a[i + p]) == trimmed(b[j + q]); }))
+			paired.emplace_back(i + x, j + y);
+		paired.emplace_back(nextI, nextJ);
+		i = nextI + 1, j = nextJ + 1;
 	}
-
-	// The lines in common, followed by the ends of both texts. After too many
-	// changes, the texts are taken to have no lines in common.
-	std::vector<std::pair<int, int>> common = { { n, m } };
-	int x = n, y = m;
-	for(int d = changes; d > 0; --d)
-	{
-		int const k = x - y;
-		auto R = [&](int diagonal) { return reached[d - 1][diagonal + d - 1]; };
-		int const previousK = k == -d || (k != d && R(k - 1) < R(k + 1)) ? k + 1 : k - 1;
-		int const previousX = R(previousK), previousY = previousX - previousK;
-		for(; x > previousX && y > previousY; --x, --y)
-			common.emplace_back(x - 1, y - 1);
-		x = previousX, y = previousY;
-	}
-	for(; changes != -1 && x > 0 && y > 0; --x, --y)
-		common.emplace_back(x - 1, y - 1);
-	std::reverse(common.begin(), common.end());
 
 	std::vector<size_t> aStart = { 0 }, bStart = { 0 };
 	for(auto const& line : a)
@@ -148,10 +177,11 @@ static std::vector<std::pair<std::pair<size_t, size_t>, std::string>> LineReplac
 			res.emplace_back(std::make_pair(fromStart, fromEnd), to.substr(toStart, toEnd - toStart));
 	};
 
-	// Each run of changed lines, or each of its lines, when it has as many
-	// lines as it had (such as lines indented again).
-	int i = 0, j = 0;
-	for(auto const& [nextI, nextJ] : common)
+	// The paired lines (which may differ in white space), and between them,
+	// each run of other lines, or each of its lines, when it has as many lines
+	// as it had.
+	i = 0, j = 0;
+	for(auto const& [nextI, nextJ] : paired)
 	{
 		if(nextI - i == nextJ - j)
 		{
@@ -162,6 +192,8 @@ static std::vector<std::pair<std::pair<size_t, size_t>, std::string>> LineReplac
 		{
 			replace(aStart[i], aStart[nextI], bStart[j], bStart[nextJ]);
 		}
+		if(nextI < n)
+			replace(aStart[nextI], aStart[nextI + 1], bStart[nextJ], bStart[nextJ + 1]);
 		i = nextI + 1, j = nextJ + 1;
 	}
 	return res;
