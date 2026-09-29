@@ -32,9 +32,12 @@
 // server; a code action request gets the line as range (unless it has one),
 // and the diagnostics of its lines as context. Other requests (such as
 // workspace/symbol or codeAction/resolve) are sent as they are, and
-// workspace/applyEdit is applied by TextMate. Changes not yet sent to the
-// server are sent first. Returns NO when the document has no language server;
-// otherwise the handler is called on the main thread.
+// workspace/applyEdit is applied by TextMate (replacing only the lines that
+// change). Formatting requests fail as unknown methods (-32601) when the
+// server does not format documents, and as -32002 while it is starting.
+// Changes not yet sent to the server are sent first. Returns NO when the
+// document has no language server; otherwise the handler is called on the
+// main thread.
 - (BOOL)sendRequest:(NSString*)method params:(NSDictionary*)params document:(OakDocument*)document position:(text::pos_t const&)position handler:(void(^)(id result, NSDictionary* error))handler;
 
 // Whether the document has a language server (started, or starting), which

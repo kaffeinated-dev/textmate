@@ -64,6 +64,109 @@ static NSDictionary* ContentChange (NSString* oldText, NSString* newText)
 	};
 }
 
+// The replacements (byte ranges of one text, and their new text) that turn it
+// into another, line by line: the lines they have in common (found with
+// Myers’ algorithm) stay as they are, as do the start and end of the others,
+// so that the caret and marks on them stay where they are. Servers such as
+// ruby-lsp format a document by replacing all of it.
+static std::vector<std::pair<std::pair<size_t, size_t>, std::string>> LineReplacements (std::string const& from, std::string const& to)
+{
+	auto lines = [](std::string const& str){
+		std::vector<std::string_view> res;
+		for(size_t bol = 0; bol < str.size(); )
+		{
+			size_t eol = str.find('\n', bol);
+			eol = eol == std::string::npos ? str.size() : eol + 1;
+			res.emplace_back(str.data() + bol, eol - bol);
+			bol = eol;
+		}
+		return res;
+	};
+
+	std::vector<std::string_view> const a = lines(from), b = lines(to);
+	int const n = a.size(), m = b.size(), max = n + m;
+
+	// For each number of changes d (lines removed or added), how far the paths
+	// with d changes get in the old lines along each diagonal k (x - y).
+	std::vector<int> v(2 * max + 3, 0);
+	auto V = [&](int k) -> int& { return v[k + max + 1]; };
+	std::vector<std::vector<int>> reached; // reached[d][k + d]
+	int changes = -1;
+	for(int d = 0; d <= max && d <= 1000 && changes == -1; ++d)
+	{
+		for(int k = -d; k <= d; k += 2)
+		{
+			int x = k == -d || (k != d && V(k - 1) < V(k + 1)) ? V(k + 1) : V(k - 1) + 1;
+			for(int y = x - k; x < n && y < m && a[x] == b[y]; ++x, ++y)
+				;
+			V(k) = x;
+			if(x >= n && x - k >= m)
+				changes = d;
+		}
+		reached.emplace_back(v.begin() + max + 1 - d, v.begin() + max + 2 + d);
+	}
+
+	// The lines in common, followed by the ends of both texts. After too many
+	// changes, the texts are taken to have no lines in common.
+	std::vector<std::pair<int, int>> common = { { n, m } };
+	int x = n, y = m;
+	for(int d = changes; d > 0; --d)
+	{
+		int const k = x - y;
+		auto R = [&](int diagonal) { return reached[d - 1][diagonal + d - 1]; };
+		int const previousK = k == -d || (k != d && R(k - 1) < R(k + 1)) ? k + 1 : k - 1;
+		int const previousX = R(previousK), previousY = previousX - previousK;
+		for(; x > previousX && y > previousY; --x, --y)
+			common.emplace_back(x - 1, y - 1);
+		x = previousX, y = previousY;
+	}
+	for(; changes != -1 && x > 0 && y > 0; --x, --y)
+		common.emplace_back(x - 1, y - 1);
+	std::reverse(common.begin(), common.end());
+
+	std::vector<size_t> aStart = { 0 }, bStart = { 0 };
+	for(auto const& line : a)
+		aStart.push_back(aStart.back() + line.size());
+	for(auto const& line : b)
+		bStart.push_back(bStart.back() + line.size());
+
+	// The old and new text of changed lines, without what they start and end
+	// with in common (and not in the middle of a UTF-8 sequence).
+	auto continuation = [](std::string const& str, size_t i){ return i < str.size() && (str[i] & 0xC0) == 0x80; };
+	std::vector<std::pair<std::pair<size_t, size_t>, std::string>> res;
+	auto replace = [&](size_t fromStart, size_t fromEnd, size_t toStart, size_t toEnd){
+		size_t const start = fromStart, end = fromEnd;
+		for(; fromStart < fromEnd && toStart < toEnd && from[fromStart] == to[toStart]; ++fromStart, ++toStart)
+			;
+		for(; fromStart > start && (continuation(from, fromStart) || continuation(to, toStart)); --fromStart, --toStart)
+			;
+		for(; fromStart < fromEnd && toStart < toEnd && from[fromEnd - 1] == to[toEnd - 1]; --fromEnd, --toEnd)
+			;
+		for(; fromEnd < end && continuation(from, fromEnd); ++fromEnd, ++toEnd)
+			;
+		if(fromStart != fromEnd || toStart != toEnd)
+			res.emplace_back(std::make_pair(fromStart, fromEnd), to.substr(toStart, toEnd - toStart));
+	};
+
+	// Each run of changed lines, or each of its lines, when it has as many
+	// lines as it had (such as lines indented again).
+	int i = 0, j = 0;
+	for(auto const& [nextI, nextJ] : common)
+	{
+		if(nextI - i == nextJ - j)
+		{
+			for(; i < nextI; ++i, ++j)
+				replace(aStart[i], aStart[i + 1], bStart[j], bStart[j + 1]);
+		}
+		else
+		{
+			replace(aStart[i], aStart[nextI], bStart[j], bStart[nextJ]);
+		}
+		i = nextI + 1, j = nextJ + 1;
+	}
+	return res;
+}
+
 // How a server wants changes to documents: 0 not at all, 1 as whole texts,
 // and 2 incrementally; or -1 before it is initialized.
 static int SyncKind (LSPServer* server)
@@ -327,6 +430,30 @@ static int SyncKind (LSPServer* server)
 
 	if(state.changeTimer || state.hasChangesToSend)
 		[self sendChangesForDocument:document];
+
+	// Servers can answer requests for what they do not do with nothing, as if
+	// there were nothing to do (ruby-lsp formats nothing without a formatter),
+	// so those fail here, as requests of unknown methods do. Formatting also
+	// fails while the server is starting (which can take a while, such as when
+	// ruby-lsp installs its bundle), rather than holding up a save.
+	static NSDictionary<NSString*, NSString*>* const providers = @{
+		@"textDocument/formatting":      @"documentFormattingProvider",
+		@"textDocument/rangeFormatting": @"documentRangeFormattingProvider",
+	};
+	if(NSString* provider = providers[method])
+	{
+		id capability = state.server.capabilities[provider];
+		if(!state.server.capabilities)
+		{
+			handler(nil, @{ @"code": @(-32002), @"message": @"The language server of this document is starting." });
+			return YES;
+		}
+		else if(!capability || capability == NSNull.null || ([capability isKindOfClass:[NSNumber class]] && ![capability boolValue]))
+		{
+			handler(nil, @{ @"code": @(-32601), @"message": @"The language server of this document does not format documents." });
+			return YES;
+		}
+	}
 
 	// Requests not about a document (such as workspace/symbol or
 	// codeAction/resolve) go to the document’s server, as they are.
@@ -908,13 +1035,20 @@ static int SyncKind (LSPServer* server)
 			return start + [[text substringToIndex:character] lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
 		};
 
+		// Only the lines that change are replaced.
 		std::multimap<std::pair<size_t, size_t>, std::string> replacements;
 		for(NSDictionary* textEdit in editsByURI[uri])
 		{
 			if(![textEdit isKindOfClass:[NSDictionary class]] || ![textEdit[@"newText"] isKindOfClass:[NSString class]])
 				return @"The edit is not valid.";
-			replacements.emplace(std::make_pair(offset(textEdit[@"range"][@"start"]), offset(textEdit[@"range"][@"end"])), to_s((NSString*)textEdit[@"newText"]));
+			size_t const from = offset(textEdit[@"range"][@"start"]), to = offset(textEdit[@"range"][@"end"]);
+			if(to < from)
+				return @"The edit is not valid.";
+			for(auto const& [range, text] : LineReplacements(std::string(bytes + from, bytes + to), to_s((NSString*)textEdit[@"newText"])))
+				replacements.emplace(std::make_pair(from + range.first, from + range.second), text);
 		}
+		if(replacements.empty())
+			continue;
 
 		boost::crc_32_type checksum;
 		checksum.process_bytes(data.bytes, data.length);
