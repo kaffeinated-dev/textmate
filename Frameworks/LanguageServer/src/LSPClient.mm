@@ -328,9 +328,10 @@ static int SyncKind (LSPServer* server)
 	if(state.changeTimer || state.hasChangesToSend)
 		[self sendChangesForDocument:document];
 
-	// Workspace requests (such as workspace/symbol) go to the document’s server, as they are.
+	// Requests not about a document (such as workspace/symbol or
+	// codeAction/resolve) go to the document’s server, as they are.
 	NSMutableDictionary* request = [params mutableCopy] ?: [NSMutableDictionary dictionary];
-	if([method hasPrefix:@"workspace/"])
+	if(![method hasPrefix:@"textDocument/"])
 	{
 		[state.server sendRequest:method params:request handler:handler];
 		return YES;
