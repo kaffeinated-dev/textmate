@@ -36,6 +36,10 @@
 // on the main thread.
 - (BOOL)sendRequest:(NSString*)method params:(NSDictionary*)params document:(OakDocument*)document position:(text::pos_t const&)position handler:(void(^)(id result, NSDictionary* error))handler;
 
+// Whether the document has a language server (started, or starting), which
+// OakTextView adds to its scope as attr.language-server.
+- (BOOL)hasServerForDocument:(OakDocument*)document;
+
 // The words the language server suggests for completing the word that starts
 // at wordStart, with the caret at the position: the names of its completion
 // items, or, for those that replace a range, the word from wordStart that the

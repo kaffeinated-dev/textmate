@@ -734,11 +734,14 @@ static std::string shell_quote (std::vector<std::string> paths)
 // = OakTextView Delegate Wrappers =
 // =================================
 
+// With attr.language-server for a document with a language server, so that
+// bundle items can be for such documents.
 - (NSString*)scopeAttributes
 {
-	if([self.delegate respondsToSelector:@selector(scopeAttributes)])
-		return [self.delegate scopeAttributes];
-	return @"";
+	NSString* res = [self.delegate respondsToSelector:@selector(scopeAttributes)] ? [self.delegate scopeAttributes] : @"";
+	if(_document && [LSPClient.sharedInstance hasServerForDocument:_document])
+		res = res.length ? [res stringByAppendingString:@" attr.language-server"] : @"attr.language-server";
+	return res;
 }
 
 // =================================

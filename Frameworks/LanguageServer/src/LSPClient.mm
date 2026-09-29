@@ -299,6 +299,11 @@ static int SyncKind (LSPServer* server)
 // = Requests =
 // ============
 
+- (BOOL)hasServerForDocument:(OakDocument*)document
+{
+	return _documents[document.identifier].server.isRunning;
+}
+
 - (BOOL)sendRequest:(NSString*)method params:(NSDictionary*)params document:(OakDocument*)document position:(text::pos_t const&)position handler:(void(^)(id result, NSDictionary* error))handler
 {
 	// Edits (as servers ask clients to apply them) are applied by TextMate.
