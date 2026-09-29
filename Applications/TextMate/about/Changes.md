@@ -2,6 +2,11 @@ Title: Release Notes
 
 # Changes
 
+## 2026-09-29 (v2.0.23+kaffeinated.8)
+
+* The edits of language servers replace only the lines they change, so the caret, the selection, bookmarks, and folds elsewhere stay where they are, also when a server formats a document by replacing all of it (as ruby-lsp does, with RuboCop). Bundle commands can format a document this way: ask for its edits with `mate --lsp textDocument/formatting`, and apply them with `mate --lsp workspace/applyEdit`.
+* `mate --lsp textDocument/formatting` (or `rangeFormatting`) fails as an unknown method (-32601) when the language server does not format documents, rather than getting no edits, as for a formatted document; and with -32002 while the server is starting, so that formatting a document when saving it doesn’t wait for the server.
+
 ## 2026-09-29 (v2.0.23+kaffeinated.7)
 
 * Fixed the gutter showing the color of its divider line, which hid the line numbers, and the same color showing through the file browser. Built with a recent macOS SDK, views no longer clip their drawing to their bounds, and the divider filled everything around it.
