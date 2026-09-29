@@ -253,9 +253,12 @@ OakRolloverButton* OakCreateCloseButton (NSString* accessibilityLabel)
 	}
 	else if([value isKindOfClass:[NSColor class]])
 	{
+		// Views don’t clip to their bounds when built with the macOS 14 SDK or
+		// later, and the rect to draw can be larger than them: a line of this
+		// view (such as the gutter’s divider) would fill the views around it.
 		NSColor* color = value;
 		[color set];
-		NSRectFill(aRect);
+		NSRectFill(NSIntersectionRect(aRect, self.bounds));
 	}
 }
 @end
