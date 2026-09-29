@@ -20,10 +20,15 @@ NSString* LSPURIForPath (NSString* path);
 @property (nonatomic, copy) void(^notificationHandler)(NSString* method, id params);
 @property (nonatomic, copy) void(^terminationHandler)(int status);
 
-// Called on the main thread with requests from the server that it doesn’t
-// answer itself (such as workspace/applyEdit). Returns the result, or nil for
-// an error.
+// Called on the main thread with requests from the server (such as
+// workspace/applyEdit). Returns the result, or nil to answer as a client
+// without the feature does: with null for registrations and progress, and an
+// error for most others.
 @property (nonatomic, copy) id(^requestHandler)(NSString* method, id params);
+
+// Called on the main thread once the server is initialized, after the
+// messages sent before then.
+@property (nonatomic, copy) void(^initializationHandler)();
 
 // Starts the process, run by /bin/sh in the root folder, and initializes the
 // server. Messages sent before the server is initialized are sent once it is.

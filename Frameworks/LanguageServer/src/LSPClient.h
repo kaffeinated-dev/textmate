@@ -12,7 +12,9 @@
 // files (or, with preferOuterRoot, in the next one up, if there is one, such
 // as the project of a dependency or the umbrella of an application), with the
 // environment of bundle commands. It is kept up to date with the documents
-// open in that folder, and its diagnostics are shown as marks in the gutter.
+// open in that folder, and its diagnostics (sent by it, or asked for once
+// typing pauses) are shown as marks in the gutter. It is told about changes
+// to the files it registers for, also those made by other programs.
 //
 // Setting TM_DISABLE_LANGUAGE_SERVER (in Preferences → Variables or a
 // .tm_properties file) turns this off. Servers stop when TextMate quits.
@@ -34,8 +36,11 @@
 // on the main thread.
 - (BOOL)sendRequest:(NSString*)method params:(NSDictionary*)params document:(OakDocument*)document position:(text::pos_t const&)position handler:(void(^)(id result, NSDictionary* error))handler;
 
-// The words the language server suggests for completing the word at the
-// position: the names of its completion items, in the server’s order. Waits
-// at most the timeout for the server, and returns nil without a server.
-- (NSArray<NSString*>*)completionsForDocument:(OakDocument*)document position:(text::pos_t const&)position timeout:(NSTimeInterval)timeout;
+// The words the language server suggests for completing the word that starts
+// at wordStart, with the caret at the position: the names of its completion
+// items, or, for those that replace a range, the word from wordStart that the
+// replacement makes (such as “Greeter” for “Sample::Greeter” replacing
+// “Sample::Gre”), in the server’s order. Waits at most the timeout for the
+// server, and returns nil without a server.
+- (NSArray<NSString*>*)completionsForDocument:(OakDocument*)document wordStart:(text::pos_t const&)wordStart position:(text::pos_t const&)position timeout:(NSTimeInterval)timeout;
 @end

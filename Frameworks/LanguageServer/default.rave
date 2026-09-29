@@ -1,5 +1,5 @@
 target "${dirname}" {
-	require bundles document io ns plist scope settings text
+	require bundles document io ns plist regexp scope settings text
 	headers src/LSPClient.h
 	sources src/*.mm
 	frameworks Cocoa

@@ -924,9 +924,9 @@ static std::string shell_quote (std::vector<std::string> paths)
 				return [_self variablesForBundleItem:item];
 			}
 
-			std::vector<std::string> language_server_completions (size_t index)
+			std::vector<std::string> language_server_completions (size_t bow, size_t index)
 			{
-				return [_self languageServerCompletionsAtIndex:index];
+				return [_self languageServerCompletionsForWordAtIndex:bow caretIndex:index];
 			}
 
 			OakTextView* _self;
@@ -1904,12 +1904,12 @@ doScroll:
 // ===================
 
 // Suggestions for ⎋ completion (waiting at most a second for the server).
-- (std::vector<std::string>)languageServerCompletionsAtIndex:(size_t)index
+- (std::vector<std::string>)languageServerCompletionsForWordAtIndex:(size_t)bow caretIndex:(size_t)index
 {
 	std::vector<std::string> res;
 	if(documentView)
 	{
-		for(NSString* word in [LSPClient.sharedInstance completionsForDocument:self.document position:documentView->convert(index) timeout:1])
+		for(NSString* word in [LSPClient.sharedInstance completionsForDocument:self.document wordStart:documentView->convert(bow) position:documentView->convert(index) timeout:1])
 			res.push_back(to_s(word));
 	}
 	return res;

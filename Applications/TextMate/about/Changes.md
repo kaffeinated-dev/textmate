@@ -2,6 +2,12 @@ Title: Release Notes
 
 # Changes
 
+## 2026-09-29 (v2.0.23+kaffeinated.5)
+
+* Language servers that are asked for diagnostics (`textDocument/diagnostic`) rather than sending them, such as [ruby-lsp](https://shopify.github.io/ruby-lsp/), are asked when a document is opened and when typing pauses, and their diagnostics are shown in the gutter like those of other servers.
+* Language servers are told about changes to the files they watch (`workspace/didChangeWatchedFiles`), also changes made outside TextMate, such as by `git checkout` or a generator, so that they know about new, changed, and deleted files in the project.
+* Edits are sent to language servers as they are made, as the changed range for servers that accept that. ⎋ completion also uses suggestions that replace more than the word before the caret, such as `Sample::Greeter` for `Sample::Gre`.
+
 ## 2026-09-28 (v2.0.23+kaffeinated.4)
 
 * TextMate applies the edits of language servers (`workspace/applyEdit`): in open documents, which can be undone, and in other files, which are saved, as _Find in Project_ replaces. Bundle commands can apply edits the same way, with `mate --lsp workspace/applyEdit`, for example the edit of a quick fix.
