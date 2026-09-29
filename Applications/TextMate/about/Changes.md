@@ -2,6 +2,11 @@ Title: Release Notes
 
 # Changes
 
+## 2026-09-29 (v2.0.23+kaffeinated.6)
+
+* Documents with a running language server have `attr.language-server` in their scope, so that bundle items can be for those documents only, whatever their language: for example commands that ask the server for completions, definitions, or references.
+* `mate --lsp` sends requests that are not about a document (other than `textDocument/…`), such as `codeAction/resolve`, as they are.
+
 ## 2026-09-29 (v2.0.23+kaffeinated.5)
 
 * Language servers that are asked for diagnostics (`textDocument/diagnostic`) rather than sending them, such as [ruby-lsp](https://shopify.github.io/ruby-lsp/), are asked when a document is opened and when typing pauses, and their diagnostics are shown in the gutter like those of other servers.

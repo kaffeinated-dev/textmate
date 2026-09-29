@@ -26,15 +26,20 @@
 @interface LSPClient : NSObject
 + (instancetype)sharedInstance;
 
-// Sends a request about a document to its language server, adding to params
-// the document (as textDocument) and, if given, a position (as TextMate has
-// it: a zero-based line and byte offset) converted for the server. A code
-// action request gets the line as range, and its diagnostics as context. A
-// workspace request is sent as it is, and workspace/applyEdit is applied by
-// TextMate. Changes not yet sent to the server are sent first. Returns NO
-// when the document has no language server; otherwise the handler is called
-// on the main thread.
+// Sends a request to the language server of a document. A textDocument/
+// request gets the document (as textDocument) and, if given, a position (as
+// TextMate has it: a zero-based line and byte offset) converted for the
+// server; a code action request gets the line as range (unless it has one),
+// and the diagnostics of its lines as context. Other requests (such as
+// workspace/symbol or codeAction/resolve) are sent as they are, and
+// workspace/applyEdit is applied by TextMate. Changes not yet sent to the
+// server are sent first. Returns NO when the document has no language server;
+// otherwise the handler is called on the main thread.
 - (BOOL)sendRequest:(NSString*)method params:(NSDictionary*)params document:(OakDocument*)document position:(text::pos_t const&)position handler:(void(^)(id result, NSDictionary* error))handler;
+
+// Whether the document has a language server (started, or starting), which
+// OakTextView adds to its scope as attr.language-server.
+- (BOOL)hasServerForDocument:(OakDocument*)document;
 
 // The words the language server suggests for completing the word that starts
 // at wordStart, with the caret at the position: the names of its completion
