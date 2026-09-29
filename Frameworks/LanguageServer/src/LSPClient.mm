@@ -35,6 +35,7 @@ static NSString* const kMarkTypePrefix = @"lsp/";
 	NSMutableDictionary<NSString*, NSTimer*>* _idleTimers;
 	NSMutableDictionary<NSString*, NSDate*>* _exitDates;
 	NSMutableDictionary<NSString*, NSMutableSet<NSString*>*>* _diagnosedPaths;
+	NSMutableDictionary<NSString*, NSArray*>* _diagnostics; // The latest, by path
 	NSMutableDictionary<NSUUID*, LSPDocument*>* _documents;
 	NSMutableSet<NSUUID*>* _documentsWithoutServer;
 }
@@ -55,6 +56,7 @@ static NSString* const kMarkTypePrefix = @"lsp/";
 		_idleTimers             = [NSMutableDictionary dictionary];
 		_exitDates              = [NSMutableDictionary dictionary];
 		_diagnosedPaths         = [NSMutableDictionary dictionary];
+		_diagnostics            = [NSMutableDictionary dictionary];
 		_documents              = [NSMutableDictionary dictionary];
 		_documentsWithoutServer = [NSMutableSet set];
 
@@ -214,6 +216,13 @@ static NSString* const kMarkTypePrefix = @"lsp/";
 
 - (BOOL)sendRequest:(NSString*)method params:(NSDictionary*)params document:(OakDocument*)document position:(text::pos_t const&)position handler:(void(^)(id result, NSDictionary* error))handler
 {
+	// Edits (as servers ask clients to apply them) are applied by TextMate.
+	if([method isEqualToString:@"workspace/applyEdit"])
+	{
+		handler([self applyEditRequest:params], nil);
+		return YES;
+	}
+
 	if(!document)
 		return NO;
 
@@ -229,11 +238,28 @@ static NSString* const kMarkTypePrefix = @"lsp/";
 	if(state.changeTimer)
 		[self sendChangesForDocument:document];
 
+	// Workspace requests (such as workspace/symbol) go to the document’s server, as they are.
 	NSMutableDictionary* request = [params mutableCopy] ?: [NSMutableDictionary dictionary];
+	if([method hasPrefix:@"workspace/"])
+	{
+		[state.server sendRequest:method params:request handler:handler];
+		return YES;
+	}
+
 	if(!request[@"textDocument"])
 		request[@"textDocument"] = @{ @"uri": state.uri };
-	if(position != text::pos_t::undefined)
+	if([method isEqualToString:@"textDocument/codeAction"])
+	{
+		// Actions for the position’s line, with its diagnostics as context.
+		if(!request[@"range"] && position != text::pos_t::undefined)
+			request[@"range"] = @{ @"start": @{ @"line": @(position.line), @"character": @0 }, @"end": @{ @"line": @(position.line + 1), @"character": @0 } };
+		if(!request[@"context"])
+			request[@"context"] = @{ @"diagnostics": [self diagnosticsForPath:document.path inRange:request[@"range"]] };
+	}
+	else if(position != text::pos_t::undefined)
+	{
 		request[@"position"] = [self serverPositionForDocument:document position:position];
+	}
 
 	[state.server sendRequest:method params:request handler:handler];
 	return YES;
@@ -365,6 +391,9 @@ static NSString* const kMarkTypePrefix = @"lsp/";
 		server.terminationHandler = ^(int status){
 			[weakSelf serverDidExit:weakServer key:key];
 		};
+		server.requestHandler = ^id(NSString* method, id params){
+			return [method isEqualToString:@"workspace/applyEdit"] && [params isKindOfClass:[NSDictionary class]] ? [weakSelf applyEditRequest:params] : nil;
+		};
 
 		if(![server start])
 		{
@@ -467,6 +496,8 @@ static NSString* const kMarkTypePrefix = @"lsp/";
 	if(!url.isFileURL || !url.path || ![diagnostics isKindOfClass:[NSArray class]])
 		return;
 
+	_diagnostics[url.path] = diagnostics.count ? diagnostics : nil;
+
 	OakDocument* document = [OakDocumentController.sharedInstance documentWithPath:url.path];
 	[document removeAllMarksOfType:kMarkTypePrefix];
 
@@ -509,10 +540,132 @@ static NSString* const kMarkTypePrefix = @"lsp/";
 	else	[paths removeObject:url.path];
 }
 
+// The diagnostics of a file on the lines of a range.
+- (NSArray*)diagnosticsForPath:(NSString*)path inRange:(NSDictionary*)range
+{
+	NSInteger first = [range[@"start"][@"line"] integerValue], last = [range[@"end"][@"line"] integerValue];
+	if([range[@"end"][@"character"] integerValue] == 0 && first < last)
+		--last;
+
+	NSMutableArray* res = [NSMutableArray array];
+	for(NSDictionary* diagnostic in _diagnostics[path])
+	{
+		NSInteger start = [diagnostic[@"range"][@"start"][@"line"] integerValue], end = [diagnostic[@"range"][@"end"][@"line"] integerValue];
+		if(start <= last && first <= end)
+			[res addObject:diagnostic];
+	}
+	return res;
+}
+
 - (void)clearDiagnosticsForKey:(NSString*)key
 {
 	for(NSString* path in _diagnosedPaths[key])
+	{
 		[[OakDocumentController.sharedInstance documentWithPath:path] removeAllMarksOfType:kMarkTypePrefix];
+		[_diagnostics removeObjectForKey:path];
+	}
 	[_diagnosedPaths removeObjectForKey:key];
+}
+// =========
+// = Edits =
+// =========
+
+// A workspace/applyEdit request, applied: its result.
+- (NSDictionary*)applyEditRequest:(NSDictionary*)params
+{
+	NSString* failure = [self applyWorkspaceEdit:params[@"edit"]];
+	return failure ? @{ @"applied": @NO, @"failureReason": failure } : @{ @"applied": @YES };
+}
+
+// Applies the text edits of a workspace edit to documents, as Find in Project
+// replaces: in open documents (which can be undone) and in files that are not
+// open (which are saved). Returns why it could not, or nil.
+- (NSString*)applyWorkspaceEdit:(NSDictionary*)edit
+{
+	if(![edit isKindOfClass:[NSDictionary class]])
+		return @"There is no edit.";
+
+	NSMutableDictionary<NSString*, NSMutableArray*>* editsByURI = [NSMutableDictionary dictionary];
+	if([edit[@"changes"] isKindOfClass:[NSDictionary class]])
+	{
+		for(NSString* uri in edit[@"changes"])
+			[editsByURI[uri] ?: (editsByURI[uri] = [NSMutableArray array]) addObjectsFromArray:edit[@"changes"][uri]];
+	}
+	if([edit[@"documentChanges"] isKindOfClass:[NSArray class]])
+	{
+		for(NSDictionary* change in edit[@"documentChanges"])
+		{
+			NSString* uri = change[@"textDocument"][@"uri"];
+			if(!uri || ![change[@"edits"] isKindOfClass:[NSArray class]])
+				return @"TextMate does not create, rename, or delete files.";
+			[editsByURI[uri] ?: (editsByURI[uri] = [NSMutableArray array]) addObjectsFromArray:change[@"edits"]];
+		}
+	}
+
+	// Check all files before changing any.
+	std::vector<std::tuple<OakDocument*, std::multimap<std::pair<size_t, size_t>, std::string>, uint32_t>> changes;
+	for(NSString* uri in editsByURI)
+	{
+		NSURL* url = [NSURL URLWithString:uri];
+		if(!url.isFileURL || !url.path)
+			return [NSString stringWithFormat:@"%@ is not a file.", uri];
+
+		OakDocument* document = [OakDocumentController.sharedInstance documentWithPath:url.path];
+		NSData* data = document.isLoaded ? [document.content dataUsingEncoding:NSUTF8StringEncoding] : [NSData dataWithContentsOfFile:url.path];
+		if(!data)
+			return [NSString stringWithFormat:@"Unable to read %@.", url.path.lastPathComponent];
+
+		std::vector<size_t> lineStarts = { 0 };
+		char const* bytes = (char const*)data.bytes;
+		for(size_t i = 0; i < data.length; ++i)
+		{
+			if(bytes[i] == '\n')
+				lineStarts.push_back(i + 1);
+		}
+
+		// A position (line, UTF-16 offset) as a byte offset.
+		auto offset = [&](NSDictionary* position) -> size_t {
+			size_t line = [position[@"line"] unsignedIntegerValue];
+			if(line >= lineStarts.size())
+				return data.length;
+			size_t start = lineStarts[line], end = line + 1 < lineStarts.size() ? lineStarts[line + 1] - 1 : data.length;
+			NSString* text = [[NSString alloc] initWithBytes:bytes + start length:end - start encoding:NSUTF8StringEncoding] ?: @"";
+			NSUInteger character = MIN([position[@"character"] unsignedIntegerValue], text.length);
+			return start + [[text substringToIndex:character] lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+		};
+
+		std::multimap<std::pair<size_t, size_t>, std::string> replacements;
+		for(NSDictionary* textEdit in editsByURI[uri])
+		{
+			if(![textEdit isKindOfClass:[NSDictionary class]] || ![textEdit[@"newText"] isKindOfClass:[NSString class]])
+				return @"The edit is not valid.";
+			replacements.emplace(std::make_pair(offset(textEdit[@"range"][@"start"]), offset(textEdit[@"range"][@"end"])), to_s((NSString*)textEdit[@"newText"]));
+		}
+
+		boost::crc_32_type checksum;
+		checksum.process_bytes(data.bytes, data.length);
+		changes.emplace_back(document, replacements, checksum.checksum());
+	}
+
+	for(auto& [document, replacements, checksum] : changes)
+	{
+		if(document.isLoaded)
+		{
+			[document performReplacements:replacements checksum:checksum];
+		}
+		else if([document performReplacements:replacements checksum:checksum])
+		{
+			OakDocument* saved = document;
+			[saved saveModalForWindow:nil completionHandler:^(OakDocumentIOResult result, NSString* errorMessage, oak::uuid_t const& filterUUID){
+				if(!saved.isLoaded) // Still not open
+					saved.content = nil;
+			}];
+		}
+		else
+		{
+			return [NSString stringWithFormat:@"%@ changed on disk.", document.path.lastPathComponent];
+		}
+	}
+	return nil;
 }
 @end

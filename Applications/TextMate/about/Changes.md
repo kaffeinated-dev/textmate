@@ -2,6 +2,11 @@ Title: Release Notes
 
 # Changes
 
+## 2026-09-28 (v2.0.23+kaffeinated.4)
+
+* TextMate applies the edits of language servers (`workspace/applyEdit`): in open documents, which can be undone, and in other files, which are saved, as _Find in Project_ replaces. Bundle commands can apply edits the same way, with `mate --lsp workspace/applyEdit`, for example the edit of a quick fix.
+* `mate --lsp textDocument/codeAction --line «line»` asks for the actions of the line, with the diagnostics of the line as their context.
+
 ## 2026-09-28 (v2.0.23+kaffeinated.3)
 
 * Completion (⎋) now suggests what the document’s language server does first, and then words of the document as before.
