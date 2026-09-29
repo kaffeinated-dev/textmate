@@ -2,6 +2,10 @@ Title: Release Notes
 
 # Changes
 
+## 2026-09-29 (v2.0.23+kaffeinated.9)
+
+* When an edit of a language server (or of a command, with `mate --lsp workspace/applyEdit`) both indents lines again and removes or adds lines, such as blank ones, the lines that are the same but for their white space are still replaced one by one. So the caret and bookmarks stay on their lines when a formatter re-indents a document, as htmlbeautifier does for ERB views.
+
 ## 2026-09-29 (v2.0.23+kaffeinated.8)
 
 * The edits of language servers replace only the lines they change, so the caret, the selection, bookmarks, and folds elsewhere stay where they are, also when a server formats a document by replacing all of it (as ruby-lsp does, with RuboCop). Bundle commands can format a document this way: ask for its edits with `mate --lsp textDocument/formatting`, and apply them with `mate --lsp workspace/applyEdit`.
