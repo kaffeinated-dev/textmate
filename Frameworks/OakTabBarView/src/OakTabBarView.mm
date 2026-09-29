@@ -153,7 +153,7 @@ static NSString* const OakTabItemPasteboardType = @"com.macromates.TextMate.tabI
 - (void)drawRect:(NSRect)aRect
 {
 	[_fillColor set];
-	[NSBezierPath fillRect:aRect];
+	[NSBezierPath fillRect:NSIntersectionRect(aRect, self.bounds)];
 }
 
 - (void)setFillColor:(NSColor*)color

@@ -2,6 +2,10 @@ Title: Release Notes
 
 # Changes
 
+## 2026-09-29 (v2.0.23+kaffeinated.7)
+
+* Fixed the gutter showing the color of its divider line, which hid the line numbers, and the same color showing through the file browser. Built with a recent macOS SDK, views no longer clip their drawing to their bounds, and the divider filled everything around it.
+
 ## 2026-09-29 (v2.0.23+kaffeinated.6)
 
 * Documents with a running language server have `attr.language-server` in their scope, so that bundle items can be for those documents only, whatever their language: for example commands that ask the server for completions, definitions, or references.
