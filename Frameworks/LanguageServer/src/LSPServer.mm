@@ -254,12 +254,15 @@ NSString* LSPURIForPath (NSString* path)
 		@"workspaceFolders": @[ @{ @"uri": rootURI, @"name": _rootURL.lastPathComponent } ],
 		@"capabilities": @{
 			@"workspace": @{
-				@"workspaceFolders": @YES,
-				@"configuration":    @YES,
+				@"workspaceFolders":      @YES,
+				@"configuration":         @YES,
+				@"didChangeWatchedFiles": @{ @"dynamicRegistration": @YES, @"relativePatternSupport": @YES },
+				@"diagnostics":           @{ @"refreshSupport": @YES },
 			},
 			@"textDocument": @{
 				@"synchronization":    @{ @"didSave": @YES },
 				@"publishDiagnostics": @{ @"relatedInformation": @NO },
+				@"diagnostic":         @{ @"dynamicRegistration": @NO },
 			},
 		},
 	};
@@ -285,6 +288,9 @@ NSString* LSPURIForPath (NSString* path)
 	for(NSDictionary* message in _pendingMessages)
 		[self writeMessage:message];
 	[_pendingMessages removeAllObjects];
+
+	if(_initializationHandler)
+		_initializationHandler();
 }
 
 // =============
@@ -364,14 +370,18 @@ NSString* LSPURIForPath (NSString* path)
 	}
 }
 
-// Requests from the server, answered as a client without these features does,
-// unless the request handler answers them.
+// Requests from the server that the request handler does not answer are
+// answered as a client without these features does.
 - (void)handleRequest:(NSString*)method params:(id)params identifier:(id)identifier
 {
 	id result = NSNull.null;
 	NSDictionary* error;
 
-	if([method isEqualToString:@"workspace/configuration"])
+	if(id answer = _requestHandler ? _requestHandler(method, params) : nil)
+	{
+		result = answer;
+	}
+	else if([method isEqualToString:@"workspace/configuration"])
 	{
 		NSMutableArray* configuration = [NSMutableArray array];
 		for(NSUInteger i = 0; i < [params[@"items"] count]; ++i)
@@ -384,8 +394,7 @@ NSString* LSPURIForPath (NSString* path)
 	}
 	else if(![@[ @"client/registerCapability", @"client/unregisterCapability", @"window/workDoneProgress/create", @"window/showMessageRequest" ] containsObject:method])
 	{
-		if(!(result = _requestHandler ? _requestHandler(method, params) : nil))
-			error = @{ @"code": @(-32601), @"message": [NSString stringWithFormat:@"TextMate does not support %@", method] };
+		error = @{ @"code": @(-32601), @"message": [NSString stringWithFormat:@"TextMate does not support %@", method] };
 	}
 
 	[self writeMessage:error ? @{ @"id": identifier, @"error": error } : @{ @"id": identifier, @"result": result }];

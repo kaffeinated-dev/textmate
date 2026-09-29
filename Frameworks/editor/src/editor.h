@@ -158,8 +158,8 @@ namespace ng
 		virtual ~editor_delegate_t () { }
 		virtual std::map<std::string, std::string> variables_for_bundle_item (bundles::item_ptr item) = 0;
 
-		// Words to complete the word ending at the index with, from a language server.
-		virtual std::vector<std::string> language_server_completions (size_t index) { return { }; }
+		// Words to complete the word from bow (to the caret at the index) with, from a language server.
+		virtual std::vector<std::string> language_server_completions (size_t bow, size_t index) { return { }; }
 	};
 
 	enum indent_correction_t { kIndentCorrectNever, kIndentCorrectNonEmptyLines, kIndentCorrectAlways };

@@ -120,7 +120,7 @@ namespace ng
 
 		std::vector<std::string> serverResult;
 		if(_delegate)
-			serverResult = _delegate->language_server_completions(bow + prefix.size());
+			serverResult = _delegate->language_server_completions(bow, bow + prefix.size());
 
 		if(commandResult.empty() && serverResult.empty() && prefix.empty() && suffix.empty())
 			return { };

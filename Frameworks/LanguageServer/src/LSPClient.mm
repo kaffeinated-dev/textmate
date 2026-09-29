@@ -1,4 +1,5 @@
 #import "LSPClient.h"
+#import "LSPFileWatcher.h"
 #import "LSPServer.h"
 #import <bundles/bundles.h>
 #import <document/OakDocument.h>
@@ -10,12 +11,69 @@
 #import <settings/settings.h>
 #import <text/types.h>
 
-static NSTimeInterval const kChangeDelay       = 0.3; // Changes are sent once typing pauses for this long
+static NSTimeInterval const kChangeDelay       = 0.3; // Whole texts are sent, and diagnostics asked for, once typing pauses this long
 static NSTimeInterval const kIdleShutDownDelay = 300; // A server without open documents is stopped after this long
 static NSTimeInterval const kRestartDelay      = 60;  // A server that exited is not started again sooner
 
 // Marks for diagnostics: lsp/error, lsp/warning, and lsp/note.
 static NSString* const kMarkTypePrefix = @"lsp/";
+
+static std::vector<unichar> Characters (NSString* str)
+{
+	std::vector<unichar> res(str.length);
+	[str getCharacters:res.data() range:NSMakeRange(0, res.size())];
+	return res;
+}
+
+// The change from one text to another, as an incremental change: the range of
+// the old text between their common start and end (as the protocol counts,
+// in lines and UTF-16 code units), and the new text for it.
+static NSDictionary* ContentChange (NSString* oldText, NSString* newText)
+{
+	std::vector<unichar> const from = Characters(oldText), to = Characters(newText);
+
+	size_t start = 0;
+	while(start < from.size() && start < to.size() && from[start] == to[start])
+		++start;
+	size_t end = 0;
+	while(end < from.size() - start && end < to.size() - start && from[from.size() - end - 1] == to[to.size() - end - 1])
+		++end;
+
+	// Not between the two halves of a surrogate pair.
+	if(start && CFStringIsSurrogateHighCharacter(from[start - 1]))
+		--start;
+	if(end && CFStringIsSurrogateLowCharacter(from[from.size() - end]))
+		--end;
+
+	auto position = [&](size_t index){
+		size_t line = 0, lineStart = 0;
+		for(size_t i = 0; i < index; ++i)
+		{
+			if(from[i] == '\n')
+			{
+				++line;
+				lineStart = i + 1;
+			}
+		}
+		return @{ @"line": @(line), @"character": @(index - lineStart) };
+	};
+
+	return @{
+		@"range": @{ @"start": position(start), @"end": position(from.size() - end) },
+		@"text":  [newText substringWithRange:NSMakeRange(start, to.size() - end - start)],
+	};
+}
+
+// How a server wants changes to documents: 0 not at all, 1 as whole texts,
+// and 2 incrementally; or -1 before it is initialized.
+static int SyncKind (LSPServer* server)
+{
+	if(!server.capabilities)
+		return -1;
+	id sync = server.capabilities[@"textDocumentSync"];
+	id kind = [sync isKindOfClass:[NSDictionary class]] ? sync[@"change"] : sync;
+	return [kind isKindOfClass:[NSNumber class]] ? [kind intValue] : 1;
+}
 
 // What a server knows about a document.
 @interface LSPDocument : NSObject
@@ -23,7 +81,12 @@ static NSString* const kMarkTypePrefix = @"lsp/";
 @property (nonatomic) NSString* serverKey;
 @property (nonatomic) NSString* uri;
 @property (nonatomic) NSInteger version;
+@property (nonatomic) NSString* text; // As sent to the server
 @property (nonatomic) NSTimer* changeTimer;
+@property (nonatomic) BOOL hasChangesToSend; // Once the server is initialized
+@property (nonatomic) NSTimer* diagnosticsTimer;
+@property (nonatomic) BOOL awaitingDiagnostics;
+@property (nonatomic) BOOL needsDiagnostics; // Once those awaited are answered
 @end
 
 @implementation LSPDocument
@@ -32,6 +95,7 @@ static NSString* const kMarkTypePrefix = @"lsp/";
 @interface LSPClient ()
 {
 	NSMutableDictionary<NSString*, LSPServer*>* _servers; // By command and root folder
+	NSMutableDictionary<NSString*, LSPFileWatcher*>* _fileWatchers;
 	NSMutableDictionary<NSString*, NSTimer*>* _idleTimers;
 	NSMutableDictionary<NSString*, NSDate*>* _exitDates;
 	NSMutableDictionary<NSString*, NSMutableSet<NSString*>*>* _diagnosedPaths;
@@ -53,6 +117,7 @@ static NSString* const kMarkTypePrefix = @"lsp/";
 	if(self = [super init])
 	{
 		_servers                = [NSMutableDictionary dictionary];
+		_fileWatchers           = [NSMutableDictionary dictionary];
 		_idleTimers             = [NSMutableDictionary dictionary];
 		_exitDates              = [NSMutableDictionary dictionary];
 		_diagnosedPaths         = [NSMutableDictionary dictionary];
@@ -104,8 +169,10 @@ static NSString* const kMarkTypePrefix = @"lsp/";
 		return [self openDocument:document];
 	}
 
+	// Incremental changes are sent right away (together, for those made at
+	// once), and whole texts once typing pauses.
 	[state.changeTimer invalidate];
-	state.changeTimer = [NSTimer scheduledTimerWithTimeInterval:kChangeDelay target:self selector:@selector(changeTimerDidFire:) userInfo:document repeats:NO];
+	state.changeTimer = [NSTimer scheduledTimerWithTimeInterval:SyncKind(state.server) == 2 ? 0 : kChangeDelay target:self selector:@selector(changeTimerDidFire:) userInfo:document repeats:NO];
 }
 
 - (void)changeTimerDidFire:(NSTimer*)aTimer
@@ -129,7 +196,7 @@ static NSString* const kMarkTypePrefix = @"lsp/";
 	if(!state)
 		return [self openDocument:document];
 
-	if(state.changeTimer)
+	if(state.changeTimer || state.hasChangesToSend)
 		[self sendChangesForDocument:document];
 	[state.server sendNotification:@"textDocument/didSave" params:@{ @"textDocument": @{ @"uri": state.uri } }];
 }
@@ -164,6 +231,7 @@ static NSString* const kMarkTypePrefix = @"lsp/";
 	state.serverKey = key;
 	state.uri       = LSPURIForPath(document.path);
 	state.version   = 1;
+	state.text      = document.content ?: @"";
 	_documents[document.identifier] = state;
 
 	[server sendNotification:@"textDocument/didOpen" params:@{
@@ -171,11 +239,15 @@ static NSString* const kMarkTypePrefix = @"lsp/";
 			@"uri":        state.uri,
 			@"languageId": languageId,
 			@"version":    @(state.version),
-			@"text":       document.content ?: @"",
+			@"text":       state.text,
 		}
 	}];
+	[self pullDiagnosticsForDocument:document.identifier];
 }
 
+// Changes are held back until the server is initialized, and how it wants
+// them is known. Servers with incremental sync get the changed range, as some
+// (such as ruby-lsp) need it, and others the whole text.
 - (void)sendChangesForDocument:(OakDocument*)document
 {
 	LSPDocument* state = _documents[document.identifier];
@@ -184,11 +256,23 @@ static NSString* const kMarkTypePrefix = @"lsp/";
 	if(!state || !state.server.isRunning)
 		return;
 
+	int const kind = SyncKind(state.server);
+	state.hasChangesToSend = kind == -1;
+	if(kind <= 0)
+		return;
+
+	NSString* text = document.content ?: @"";
+	if([text isEqualToString:state.text])
+		return;
+
+	NSDictionary* change = kind == 2 ? ContentChange(state.text, text) : @{ @"text": text };
+	state.text     = text;
 	state.version += 1;
 	[state.server sendNotification:@"textDocument/didChange" params:@{
 		@"textDocument":   @{ @"uri": state.uri, @"version": @(state.version) },
-		@"contentChanges": @[ @{ @"text": document.content ?: @"" } ],
+		@"contentChanges": @[ change ],
 	}];
+	[self scheduleDiagnosticsForDocument:document.identifier];
 }
 
 - (void)closeDocument:(OakDocument*)document
@@ -200,6 +284,7 @@ static NSString* const kMarkTypePrefix = @"lsp/";
 		return;
 
 	[state.changeTimer invalidate];
+	[state.diagnosticsTimer invalidate];
 	[_documents removeObjectForKey:document.identifier];
 	[document removeAllMarksOfType:kMarkTypePrefix];
 
@@ -235,7 +320,7 @@ static NSString* const kMarkTypePrefix = @"lsp/";
 			return NO;
 	}
 
-	if(state.changeTimer)
+	if(state.changeTimer || state.hasChangesToSend)
 		[self sendChangesForDocument:document];
 
 	// Workspace requests (such as workspace/symbol) go to the document’s server, as they are.
@@ -278,7 +363,7 @@ static NSString* const kMarkTypePrefix = @"lsp/";
 	return @{ @"line": @(position.line), @"character": @(character) };
 }
 
-- (NSArray<NSString*>*)completionsForDocument:(OakDocument*)document position:(text::pos_t const&)position timeout:(NSTimeInterval)timeout
+- (NSArray<NSString*>*)completionsForDocument:(OakDocument*)document wordStart:(text::pos_t const&)wordStart position:(text::pos_t const&)position timeout:(NSTimeInterval)timeout
 {
 	__block id response;
 	__block BOOL done = NO;
@@ -310,12 +395,38 @@ static NSString* const kMarkTypePrefix = @"lsp/";
 		return [left compare:right];
 	}];
 
+	// The caret’s line, and where the word starts in it, as the server counts.
+	NSArray<NSString*>* lines = [document.content componentsSeparatedByString:@"\n"];
+	NSString* line = position.line < lines.count ? lines[position.line] : @"";
+	NSUInteger wordStartCharacter = MIN([[self serverPositionForDocument:document position:wordStart][@"character"] unsignedIntegerValue], line.length);
+
 	// The name of an item such as “map(enumerable, fun)”, completed as a word.
 	NSCharacterSet* nameEnd = [NSCharacterSet characterSetWithCharactersInString:@"( "];
 	NSMutableOrderedSet* words = [NSMutableOrderedSet orderedSet];
 	for(NSDictionary* item in sorted)
 	{
 		NSString* name = [item[@"filterText"] isKindOfClass:[NSString class]] ? item[@"filterText"] : item[@"label"];
+
+		// For an edit (a text edit, or an insert and replace edit) of the line,
+		// the word it makes, if it leaves the text before the word as it is.
+		NSDictionary* edit = [item[@"textEdit"] isKindOfClass:[NSDictionary class]] ? item[@"textEdit"] : nil;
+		NSDictionary* range = [edit[@"range"] isKindOfClass:[NSDictionary class]] ? edit[@"range"] : edit[@"insert"];
+		if([edit[@"newText"] isKindOfClass:[NSString class]] && [range isKindOfClass:[NSDictionary class]])
+		{
+			NSUInteger start = [range[@"start"][@"character"] unsignedIntegerValue];
+			if([range[@"start"][@"line"] unsignedIntegerValue] != position.line || start > line.length)
+				continue;
+
+			NSString* newText = edit[@"newText"];
+			if([item[@"insertTextFormat"] intValue] == 2) // A snippet, up to its first placeholder
+				newText = [newText componentsSeparatedByString:@"$"].firstObject;
+
+			NSString* edited = [[line substringToIndex:start] stringByAppendingString:newText];
+			if(edited.length < wordStartCharacter || ![[edited substringToIndex:wordStartCharacter] isEqualToString:[line substringToIndex:wordStartCharacter]])
+				continue;
+			name = [edited substringFromIndex:wordStartCharacter];
+		}
+
 		name = [name componentsSeparatedByCharactersInSet:nameEnd].firstObject;
 		if(name.length)
 			[words addObject:name];
@@ -392,7 +503,10 @@ static NSString* const kMarkTypePrefix = @"lsp/";
 			[weakSelf serverDidExit:weakServer key:key];
 		};
 		server.requestHandler = ^id(NSString* method, id params){
-			return [method isEqualToString:@"workspace/applyEdit"] && [params isKindOfClass:[NSDictionary class]] ? [weakSelf applyEditRequest:params] : nil;
+			return [weakSelf server:weakServer key:key didSendRequest:method params:params];
+		};
+		server.initializationHandler = ^{
+			[weakSelf serverDidInitialize:weakServer];
 		};
 
 		if(![server start])
@@ -453,6 +567,7 @@ static NSString* const kMarkTypePrefix = @"lsp/";
 	LSPServer* server = _servers[key];
 	[_servers removeObjectForKey:key];
 	[self clearDiagnosticsForKey:key];
+	[self stopWatchingFilesForKey:key];
 	[server shutDown];
 }
 
@@ -466,20 +581,173 @@ static NSString* const kMarkTypePrefix = @"lsp/";
 	[_servers removeObjectForKey:key];
 	_exitDates[key] = NSDate.date;
 	[self clearDiagnosticsForKey:key];
+	[self stopWatchingFilesForKey:key];
 
 	for(NSUUID* identifier in _documents.allKeys)
 	{
 		if(_documents[identifier].server == server)
 		{
 			[_documents[identifier].changeTimer invalidate];
+			[_documents[identifier].diagnosticsTimer invalidate];
 			[_documents removeObjectForKey:identifier];
 		}
 	}
 }
 
+// Requests from a server that TextMate answers: edits to apply, files to
+// watch, and diagnostics to ask for again.
+- (id)server:(LSPServer*)server key:(NSString*)key didSendRequest:(NSString*)method params:(id)params
+{
+	if(!server || _servers[key] != server)
+		return nil;
+
+	NSDictionary* dictionary = [params isKindOfClass:[NSDictionary class]] ? params : @{ };
+	if([method isEqualToString:@"workspace/applyEdit"])
+	{
+		return [self applyEditRequest:dictionary];
+	}
+	else if([method isEqualToString:@"client/registerCapability"] || [method isEqualToString:@"client/unregisterCapability"])
+	{
+		BOOL add = [method isEqualToString:@"client/registerCapability"];
+		NSArray* registrations = dictionary[add ? @"registrations" : @"unregisterations"]; // Sic
+		for(NSDictionary* registration in [registrations isKindOfClass:[NSArray class]] ? registrations : @[ ])
+		{
+			if(![registration isKindOfClass:[NSDictionary class]] || ![registration[@"method"] isEqual:@"workspace/didChangeWatchedFiles"])
+				continue;
+
+			NSString* identifier = [registration[@"id"] description];
+			NSDictionary* options = [registration[@"registerOptions"] isKindOfClass:[NSDictionary class]] ? registration[@"registerOptions"] : nil;
+			if(add && [options[@"watchers"] isKindOfClass:[NSArray class]])
+				[[self fileWatcherForServer:server key:key] addWatchers:options[@"watchers"] identifier:identifier];
+			else if(!add)
+				[_fileWatchers[key] removeWatchersWithIdentifier:identifier];
+		}
+	}
+	else if([method isEqualToString:@"workspace/diagnostic/refresh"])
+	{
+		[self pullDiagnosticsForServer:server];
+	}
+	else
+	{
+		return nil;
+	}
+	return NSNull.null;
+}
+
+// ==================
+// = Watching Files =
+// ==================
+
+- (LSPFileWatcher*)fileWatcherForServer:(LSPServer*)server key:(NSString*)key
+{
+	if(!_fileWatchers[key])
+	{
+		__weak LSPServer* weakServer = server;
+		_fileWatchers[key] = [[LSPFileWatcher alloc] initWithRootPath:server.rootURL.path handler:^(NSArray<NSDictionary*>* changes){
+			[weakServer sendNotification:@"workspace/didChangeWatchedFiles" params:@{ @"changes": changes }];
+		}];
+	}
+	return _fileWatchers[key];
+}
+
+- (void)stopWatchingFilesForKey:(NSString*)key
+{
+	[_fileWatchers[key] stop];
+	[_fileWatchers removeObjectForKey:key];
+}
+
 // ===============
 // = Diagnostics =
 // ===============
+
+// Servers with a diagnostic provider are asked for a document’s diagnostics
+// (when it is opened, and once typing pauses) rather than sending them.
+- (void)scheduleDiagnosticsForDocument:(NSUUID*)identifier
+{
+	LSPDocument* state = _documents[identifier];
+	[state.diagnosticsTimer invalidate];
+	state.diagnosticsTimer = [NSTimer scheduledTimerWithTimeInterval:kChangeDelay target:self selector:@selector(diagnosticsTimerDidFire:) userInfo:identifier repeats:NO];
+}
+
+- (void)diagnosticsTimerDidFire:(NSTimer*)aTimer
+{
+	[self pullDiagnosticsForDocument:aTimer.userInfo];
+}
+
+// One request at a time: ruby-lsp, for one, answers with the text it has
+// when a request arrives, which lacks edits sent before it that wait behind
+// requests being answered.
+- (void)pullDiagnosticsForDocument:(NSUUID*)identifier
+{
+	LSPDocument* state = _documents[identifier];
+	[state.diagnosticsTimer invalidate];
+	state.diagnosticsTimer = nil;
+	if(!state.server.isRunning || ![state.server.capabilities[@"diagnosticProvider"] isKindOfClass:[NSDictionary class]])
+		return;
+
+	state.needsDiagnostics = state.awaitingDiagnostics;
+	if(state.awaitingDiagnostics)
+		return;
+
+	__weak LSPClient* weakSelf = self;
+	__weak LSPDocument* weakState = state;
+	NSInteger version = state.version;
+	state.awaitingDiagnostics = YES;
+	[state.server sendRequest:@"textDocument/diagnostic" params:@{ @"textDocument": @{ @"uri": state.uri } } handler:^(id result, NSDictionary* error){
+		[weakSelf document:identifier state:weakState version:version didPullDiagnostics:result error:error];
+	}];
+}
+
+// Documents opened before the server was initialized get their changes
+// since, if any, and their diagnostics.
+- (void)serverDidInitialize:(LSPServer*)server
+{
+	for(NSUUID* identifier in _documents.allKeys)
+	{
+		LSPDocument* state = _documents[identifier];
+		if(state.server != server)
+			continue;
+
+		OakDocument* document = [OakDocumentController.sharedInstance findDocumentWithIdentifier:identifier];
+		if(state.hasChangesToSend && document)
+				[self sendChangesForDocument:document];
+		else	[self pullDiagnosticsForDocument:identifier];
+	}
+}
+
+- (void)pullDiagnosticsForServer:(LSPServer*)server
+{
+	for(NSUUID* identifier in _documents)
+	{
+		if(_documents[identifier].server == server)
+			[self pullDiagnosticsForDocument:identifier];
+	}
+}
+
+- (void)document:(NSUUID*)identifier state:(LSPDocument*)state version:(NSInteger)version didPullDiagnostics:(id)result error:(NSDictionary*)error
+{
+	if(!state || _documents[identifier] != state)
+		return;
+
+	state.awaitingDiagnostics = NO;
+	if(state.needsDiagnostics)
+	{
+		state.needsDiagnostics = NO;
+		[self scheduleDiagnosticsForDocument:identifier];
+	}
+
+	// Diagnostics for an older version, or with newer changes still to be
+	// sent, are followed by others.
+	if(error || state.version != version || state.changeTimer || state.hasChangesToSend)
+		return;
+
+	NSDictionary* report = [result isKindOfClass:[NSDictionary class]] ? result : nil;
+	if([report[@"kind"] isEqual:@"unchanged"])
+		return;
+
+	NSArray* items = [report[@"items"] isKindOfClass:[NSArray class]] ? report[@"items"] : @[ ];
+	[self publishDiagnostics:@{ @"uri": state.uri, @"diagnostics": items } key:state.serverKey];
+}
 
 - (void)server:(LSPServer*)server key:(NSString*)key didSendNotification:(NSString*)method params:(id)params
 {
